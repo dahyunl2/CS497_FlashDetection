@@ -3,7 +3,6 @@ import cv2
 import numpy as np
 from collections import deque
 import DangerDetection
-import scipy
 
 def filehandler(filename, speed):
     # get file and frame data
@@ -50,7 +49,8 @@ def filehandler(filename, speed):
             cTotal = np.sum(frame_rgb[i,j])
             rperc = 0 if cTotal == 0 else frame_rgb[i,j,0] / cTotal
             chromacityRerc[i][j]=(uv, rperc)
-    ###What format of array wanted as input to red_transition_fsm? can it be [i][j] array that contains ((U,V),Rper)? 
+            #((U,V),Rper)
+   
 
 
     # Add the current frame to the buffer
