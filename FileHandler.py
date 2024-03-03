@@ -3,6 +3,7 @@ import cv2
 import numpy as np
 from collections import deque
 import DangerDetection
+import scipy
 
 def filehandler(filename, speed):
     # get file and frame data
@@ -28,6 +29,30 @@ def filehandler(filename, speed):
     # Convert from BGR to HLS
     hls_frame = cv2.cvtColor(frame, cv2.COLOR_BGR2HLS)
 
+    # Convert from BGR to RGB
+    frame_rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
+
+    tristimulus_matrix = np.array([
+        [0.4124564, 0.3575761, 0.1804375],
+        [0.2126729, 0.7151522, 0.0721750],
+        [0.0193339, 0.1191920, 0.9503041]
+    ])
+
+    # U = np.zeros(frame_rgb.shape[:2])
+    # V = np.zeros(frame_rgb.shape[:2])
+    # Rperc = np.zeros(frame_rgb.shape[:2])
+    chromacityRerc=np.zeros(frame_rgb.shape[:2])
+    for i in range(frame_rgb.shape[0]):
+        for j in range(frame_rgb.shape[1]):
+            b = np.dot(tristimulus_matrix, frame_rgb[i,j])
+            d = (b[0] + 15 * b[1] + 3 * b[2])
+            uv=(4 * b[0] / d, 9 * b[1] / d)
+            cTotal = np.sum(frame_rgb[i,j])
+            rperc = 0 if cTotal == 0 else frame_rgb[i,j,0] / cTotal
+            chromacityRerc[i][j]=(uv, rperc)
+    ###What format of array wanted as input to red_transition_fsm? can it be [i][j] array that contains ((U,V),Rper)? 
+
+
     # Add the current frame to the buffer
     frame_buffer.append(hls_frame)
 
@@ -46,3 +71,4 @@ def filehandler(filename, speed):
 
 
     cap.release()
+    return chromacityRerc
