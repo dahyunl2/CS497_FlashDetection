@@ -5,22 +5,6 @@ from collections import deque
 import DangerDetection
 import scipy
 
-# unpadded 2d conv with stride applied
-def strided_fftconvolve(in1, in2, stride):
-  return scipy.signal.fftconvolve(in1, in2, mode='valid',axes=[0,1])[::stride,::stride].astype(int)
-
-# creates a normalized circular greyscale mask with values bounded [0,1]
-def circular_mask(size, radius):
-    mask = np.zeros((size, size), dtype=float)
-    center = size // 2
-    y, x = np.ogrid[:size, :size]
-    distances = np.sqrt((x - center) ** 2 + (y - center) ** 2)
-    mask[distances <= radius] = 1.0 - distances[distances <= radius] / radius
-    total_weight = np.sum(mask)
-    if total_weight > 0:
-        mask /= total_weight
-    return mask
-
 def filehandler(filename, speed):
     # get file and frame data
     cap = cv2.VideoCapture(filename)
@@ -54,27 +38,20 @@ def filehandler(filename, speed):
         [0.0193339, 0.1191920, 0.9503041]
     ])
 
-    #####is this right?
-    # dims of mask, circle, stride
-    size = 16
-    radius = 6
-    stride = 16
-
-    mask = circular_mask(size, radius)
-    frame_treated = np.dstack([strided_fftconvolve(frame_rgb[:,:,i], mask, stride) for i in range(3)])
-
-    U = np.zeros(frame_treated.shape[:2])
-    V = np.zeros(frame_treated.shape[:2])
-    Rperc = np.zeros(frame_treated.shape[:2])
-    for i in range(frame_treated.shape[0]):
-        for j in range(frame_treated.shape[1]):
-            b = np.dot(tristimulus_matrix, frame_treated[i,j])
+    # U = np.zeros(frame_rgb.shape[:2])
+    # V = np.zeros(frame_rgb.shape[:2])
+    # Rperc = np.zeros(frame_rgb.shape[:2])
+    chromacityRerc=np.zeros(frame_rgb.shape[:2])
+    for i in range(frame_rgb.shape[0]):
+        for j in range(frame_rgb.shape[1]):
+            b = np.dot(tristimulus_matrix, frame_rgb[i,j])
             d = (b[0] + 15 * b[1] + 3 * b[2])
-            U[i,j] = 4 * b[0] / d
-            V[i,j] = 9 * b[1] / d
-            cTotal = np.sum(frame_treated[i,j])
-            Rperc[i,j] = 0 if cTotal == 0 else frame_treated[i,j,0] / cTotal
+            uv=(4 * b[0] / d, 9 * b[1] / d)
+            cTotal = np.sum(frame_rgb[i,j])
+            rperc = 0 if cTotal == 0 else frame_rgb[i,j,0] / cTotal
+            chromacityRerc[i][j]=(uv, rperc)
     ###What format of array wanted as input to red_transition_fsm? can it be [i][j] array that contains ((U,V),Rper)? 
+
 
     # Add the current frame to the buffer
     frame_buffer.append(hls_frame)
@@ -94,3 +71,4 @@ def filehandler(filename, speed):
 
 
     cap.release()
+    return chromacityRerc
