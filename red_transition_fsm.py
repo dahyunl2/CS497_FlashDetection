@@ -18,6 +18,7 @@ import numpy as np
 import cv2
 from collections import deque
 import time
+import math
 
 class ChromaticityChecker:
     """
@@ -38,7 +39,7 @@ class ChromaticityChecker:
         Initializes a new instance of a ChromaticityChecker.
         """
         ChromaticityChecker.MAX_CHROMATICITY_DIFF = 0.2
-        self.coordinates = []
+        self.coordinates = set()
 
     def push(self, coordinate):
         """
@@ -47,7 +48,7 @@ class ChromaticityChecker:
         Args:
             element((float, float)): The (u', v') chromaticity coordinate to add to the ChromaticityChecker
         """
-        self.coordinates.append(coordinate)
+        self.coordinates.add(coordinate)
 
     def is_above_threshold(self, other_coord):
         """
@@ -57,9 +58,20 @@ class ChromaticityChecker:
             other_coord((float, float)): The (u', v') chromaticity coordinate of a region of a frame
         """
         # print(self.coordinates)
-        coordinates_array = np.array(self.coordinates)
+        coordinates_array = np.array(list(self.coordinates))
         # The chromaticity difference is calculated as SQRT( (u'1 - u'2)^2 + (v'1 - v'2)^2 )
-        differences = np.linalg.norm(coordinates_array - other_coord, axis=1)
+        # differences = []
+        # for u, v in self.coordinates:
+        #     print("u" + str(u))
+        #     print("v" + str(v))
+        #     print("otheru" + str(other_coord[0]))
+        #     print("otherv" + str(other_coord[1]))
+        #     differences.append(math.sqrt((u - other_coord[0])**2 + (v - other_coord[1])**2))
+        # differences = np.array(differences)
+        # print(differences)
+        differences = np.linalg.norm(coordinates_array - other_coord, ord = 2, axis=1)
+        # print(differences)
+        # print("Other coord is " + str(other_coord))
         # Are any of the changes above the threshold?
         return np.any(differences >= self.MAX_CHROMATICITY_DIFF)
 
@@ -142,6 +154,37 @@ class State:
             state_string (string): String representation of the state object
         """
         return f"<State name:{self.name} index:{self.idx}>"
+    
+    @staticmethod
+    def compare_states(state1, state2):
+        """
+        Determines whether one state is closer to the flash state than another.
+
+        Returns:
+            compare_state_value (int): 
+                0: the states are not comparable (different indices)
+                1: state 1 is closer to the flash state
+                2: state 2 is closer to the flash state
+                3: states are equal
+        """
+        # Each state maps to a "quality" (states closer to a flash state have higher quality)
+        # E is closest to the flash state
+        # A is furthest
+        # C is preferable to B or D
+        # B and D are not comparable
+        if state1.idx != state2.idx and state1.name == state2.name:
+            return 3
+
+        quality = {"A": 0, "B": 1, "C": 2, "D": 1, "E": 3}
+        
+        if quality[state1.name] > quality[state2.name]:
+            return 1
+        elif quality[state2.name] > quality[state1.name]:
+            return 2
+        else:
+            if state1.name == state2.name:
+                return 4
+            return 0
 
 class Region:
     """
@@ -218,6 +261,7 @@ class Region:
 
         # If the change in chromaticity exceeds MAX_CHROMATICITY_DIFF,
         # and we have a saturated red if needed, then we can transition
+        # print(chromaticity)
         if state.chromaticity_checker.is_above_threshold(chromaticity):
             return True
 
@@ -234,11 +278,29 @@ class Region:
             state_set (set(State)): The set of states we are in in the state machine
             chromaticity ((float, float)): The chromaticity coordinate of the region in the newly-added frame
         """
+        states_to_delete = []
+
+        # print("Printing set")
         for s in state_set:
-            if s == state:
+            # print(s)
+            comp_value = State.compare_states(s, state)
+            if comp_value == 2:
+                # This state is better than our previous state
+                states_to_delete.append(s)
+            elif comp_value == 3:
+                # This is an existing state; push the chromaticity value
                 s.chromaticity_checker.push(chromaticity)
                 return
+            elif comp_value == 4:
+                states_to_delete.append(s)
+            elif comp_value == 1:
+                # There is a better state in the set of states
+                return
+        
         state_set.add(state)
+
+        for s in states_to_delete:
+            state_set.remove(s)
 
     @staticmethod
     def add_start_state(chromaticity, red_percentage, idx, state_set):
@@ -271,27 +333,31 @@ class Region:
 
         for state in self.states:
             # We can stay in the same state
-            state.chromaticity_checker.push(chromaticity)
+            # state.chromaticity_checker.push(chromaticity)
+            Region.update_or_add_state(state, changed_state_set, chromaticity)
 
             if state.name == 'A':
                 # print("hit here\n")
                 if Region.should_transition(
                         state, chromaticity, red_percentage, True):
+                    # print("Transition from A to C\n")
                     # We can move to state C if the chromaticity
                     # increased/decreased by MAX_CHROMATICITY_DIFF and there is
                     # a saturated red
                     state_c = State('C', chromaticity, state.idx)
                     # print("Reaching C\n")
                     Region.update_or_add_state(state_c, changed_state_set, chromaticity)
-                if Region.should_transition(
+                elif Region.should_transition(
                         state, chromaticity, red_percentage, False):
                     state_d = State('D', chromaticity, state.idx)
+                    # print("Transition from A to D\n")
                     # print("Reaching D\n")
                     Region.update_or_add_state(state_d, changed_state_set, chromaticity)
             elif state.name == 'B':
                 # print("hit here\n")
                 if Region.should_transition(
                         state, chromaticity, red_percentage, False):
+                    # print("Transition from B to C\n")
                     # We can move to state C if the chromaticity
                     # increased/decreased by MAX_CHROMATICITY_DIFF
                     state_c = State('C', chromaticity, state.idx)
@@ -301,6 +367,7 @@ class Region:
                 # print("hit here\n")
                 if Region.should_transition(
                         state, chromaticity, red_percentage, False):
+                    # print("Transition from C to E\n")
                     # We can move to state D if the chromaticity
                     # increased/decreased by MAX_CHROMATICITY_DIFF
                     state_e = State('E', chromaticity, state.idx)
@@ -308,6 +375,7 @@ class Region:
                     Region.update_or_add_state(state_e, changed_state_set, chromaticity)
             elif state.name == 'D':
                 # print("hit here\n")
+                # print("Transition from D to E\n")
                 if Region.should_transition(state, chromaticity, red_percentage, True):
                     state_e = State('E', chromaticity, state.idx)
                     # print("Reaching E\n")
@@ -368,7 +436,7 @@ class Buffer:
         for i in range(n):
             for j in range(n):
                 self.regions[i][j] = Region(self)
-        self.num_frames = num_frames
+        self.num_frames = frame_rate
         self.n = n
         self.frame_rate = frame_rate
         self.red_flash_timestamps = []
@@ -396,7 +464,8 @@ class Buffer:
                 # Determine whether we have reached the flash state (E) for this region
                 flash_idx = self.regions[i][j].flash_idx()
                 if flash_idx != -1:
-                    self.red_flash_timestamps.append((i / self.frame_rate, j / self.frame_rate))
+                    self.red_flash_timestamps.append([flash_idx / self.frame_rate, (flash_idx + self.num_frames) / self.frame_rate])
+                    self.regions[i][j].states = {item for item in self.regions[i][j].states if item.idx != flash_idx}
 
         self.idx += 1
 
@@ -433,7 +502,7 @@ def filehandler(filename, speed):
     # sliding window array which accounts for a second of visual data
     dangerous = np.zeros((frames_per_second, frame_height, frame_width, 3), dtype=np.uint8)
     frame_buffer = deque(maxlen=frames_per_second)
-    frame_buffer_red=Buffer(4,4,frame_rate)
+    frame_buffer_red=Buffer(1,20,frame_rate)
 
     # if skipping a second to optimize
     skip = 0
@@ -443,11 +512,13 @@ def filehandler(filename, speed):
 
     timestamps = []
 
+    start = time.time()
+
     while cap.isOpened():
         ret, frame = cap.read()
         if not ret:
-            print(frame_counter, frame_counter / frames_per_second)
-            print("done")
+            # print(frame_counter, frame_counter / frames_per_second)
+            # print("done")
             break
 
         # Convert from BGR to HLS
@@ -460,13 +531,7 @@ def filehandler(filename, speed):
             [0.2126729, 0.7151522, 0.0721750],
             [0.0193339, 0.1191920, 0.9503041]
         ])
-        # U = np.zeros(frame_rgb.shape[:2])
-        # V = np.zeros(frame_rgb.shape[:2])
-        # Rperc = np.zeros(frame_rgb.shape[:2])
-        # chromacityRerc=np.zeros(frame_rgb.shape[:3], dtype=np.float64)
-        # t0 = time.time()
 
-        
         flat_frame_rgb = frame_rgb.reshape(-1, 3)
 
         # Calculate b values for all pixels
@@ -476,14 +541,16 @@ def filehandler(filename, speed):
         d = b[:, 0] + 15 * b[:, 1] + 3 * b[:, 2]
 
         # Calculate u and v values for all pixels
-        u = np.where(d == 0, 0, 4 * b[:, 0] / d)
-        v = np.where(d == 0, 0, 9 * b[:, 1] / d)
+        d[d == 0.0] = 999999999
+        u = 4 * b[:, 0] / d
+        v = 9 * b[:, 1] / d
 
         # Calculate cTotal for all pixels
         cTotal = np.sum(frame_rgb, axis=2).reshape(-1)
 
         # Calculate rperc values for all pixels
-        rperc = np.where(cTotal == 0, 0, flat_frame_rgb[:, 0] / cTotal)
+        cTotal[cTotal == 0.0] = 999999999
+        rperc = flat_frame_rgb[:, 0] / cTotal
 
         # Reshape u, v, and rperc to the original shape
         u = u.reshape(frame_rgb.shape[0], frame_rgb.shape[1])
@@ -548,21 +615,25 @@ def filehandler(filename, speed):
         # frame_counter += 1
     cap.release()
 
+    end = time.time()
+
+    print("Took " + str(end - start))
+
     #timestamp merge: Detection of flashes occurs within half-second windows so we want to merge what's close together
     idx = 0
     timestamps = frame_buffer_red.get_red_flash_timestamps()
-    # while idx < len(timestamps):
-    #   stamp = timestamps[idx]
-    #   if idx + 1 == len(timestamps):
-    #     break
-    #   next = timestamps[idx + 1]
-    #   if abs(stamp[1] - next[0]) < .5:
-    #     stamp[1] = next[1]
-    #     timestamps.remove(next)
-    #   else:
-    #     idx += 1
+    while idx < len(timestamps):
+      stamp = timestamps[idx]
+      if idx + 1 == len(timestamps):
+        break
+      next = timestamps[idx + 1]
+      if abs(stamp[1] - next[0]) < .5:
+        stamp[1] = next[1]
+        timestamps.remove(next)
+      else:
+        idx += 1
 
     for st in timestamps:
       print("flashing from", st[0], "to", st[1])
 
-filehandler("sample_videos/natural_flash/Generator Explosion and Arc Flash.mp4", 2)
+filehandler("sample_videos/artificial_flash/Disco Lights trimmed.mp4", 2)
